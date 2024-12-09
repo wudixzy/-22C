@@ -12,15 +12,11 @@ def fix_date_format(date_str):
     else:
         # 如果不是上述两种情况，则保持原样
         return date_str
-    
-def weighted_moving_average(series, window, weight_factor):
-    return series.rolling(window).apply(lambda prices: np.dot(prices, weight_factor) / weight_factor.sum(), raw=True)
-
 
 class Portfolio:
     def __init__(self):
-        self.assets = {"bitcoin": 0.0, "gold": 0.0}  # 单位数量
-        self.cash = 1000.0  # 初始现金
+        self.assets = {"bitcoin": 0, "gold": 0}
+        self.cash = 1000  # 初始现金
         self.holding_period = {"bitcoin": 0, "gold": 0}  # 持有期计数
         self.no_buy_period = 0  # 无买入期计数
 
@@ -47,6 +43,8 @@ class Market:
         # 读取数据
         self.data_BCHAIN = pd.read_csv("processed_BCHAIN-MKPRU.csv")
         self.data_GOLD = pd.read_csv("processed_data_gold.csv")
+        #self.data_BCHAIN['date'] = self.data_BCHAIN['date'].apply(fix_date_format)
+        #self.data_GOLD['date'] = self.data_GOLD['date'].apply(fix_date_format)
         self.data_BCHAIN = pd.DataFrame(self.data_BCHAIN)
         self.data_GOLD = pd.DataFrame(self.data_GOLD)
         
@@ -61,38 +59,31 @@ class Market:
         
         # 参数初始化
         self.weight_factor_constant = 1  # 计算权重因子的常数 C
-        self.t = 5  # 计算权重因子的范围
+        self.t = 10  # 计算权重因子的范围
         self.C = self.weight_factor_constant
-
-
-        self.n_moving_average = 5  # 动量和均值回归移动平均窗口大小
-        self.n_sell_moving_average = 5  # 极端市场条件下卖出判断的移动平均窗口大小
-
-        self.weight_factor = 1.0/(np.arange(1, self.n_moving_average+1)**2)
-        self.weight_factor = self.weight_factor / self.weight_factor.sum()
-
+        self.weight_factor = self.C / (np.arange(1, self.t+1)**2)
+        
+        self.n_moving_average = 10  # 移动平均窗口大小
         self.thr = 0.05  # 梯度阈值
         self.rate_above_moving_average = 1.05
-        self.rate_under_moving_average = 0.80
+        self.rate_under_moving_average = 0.90
         self.rate_extreme_market = 5
-        self.size_window_extreme_market = 5
+        self.size_window_extreme_market = 10
         self.holding_days = 5  # 持有期天数
         self.no_buy_days = 3  # 无买入期天数
         self.margin_L = 10  # 卖出利润门槛
         
         # 初始化信号列
-        self.data['grad_bitcoin'] = 0.0
-        self.data['grad_gold'] = 0.0
-        self.data['moving_average_bitcoin'] = 0.0
-        self.data['moving_average_gold'] = 0.0
-        self.data['buy_or_sell_bitcoin'] = 0  # 1 表示买入, -1 表示卖出
+        self.data['grad_bitcoin'] = 0
+        self.data['grad_gold'] = 0
+        self.data['moving_average_bitcoin'] = 0
+        self.data['moving_average_gold'] = 0
+        self.data['buy_or_sell_bitcoin'] = 0
         self.data['buy_or_sell_gold'] = 0
         self.data['Extreme_Market_bitcoin'] = False
         self.data['Extreme_Market_gold'] = False
-        self.data['Profitability_bitcoin'] = 0.0
-        self.data['Profitability_gold'] = 0.0
-        self.data['moving_average_sell_bitcoin'] = 0.0  # 用于极端市场条件下的卖出判断
-        self.data['moving_average_sell_gold'] = 0.0
+        self.data['Profitability_bitcoin'] = 0
+        self.data['Profitability_gold'] = 0
         
         # 确保 Gold 数据中包含 'is_interpolated' 列
         if 'is_interpolated' not in self.data.columns:
@@ -106,19 +97,17 @@ class Market:
         self.data['grad_gold'] = self.data['value_gold'] - self.data['value_gold'].shift(1)
 
     def compute_moving_average(self):
-        self.data['moving_average_bitcoin'] = weighted_moving_average(self.data['value_bitcoin'], self.n_moving_average, self.weight_factor)
-        self.data['moving_average_gold'] = weighted_moving_average(self.data['value_gold'], self.n_moving_average, self.weight_factor)
-        # 计算用于极端市场条件下的5天移动平均
-        self.data['max_5day_bitcoin'] = self.data['value_bitcoin'].rolling(window=self.n_sell_moving_average).max()
-        self.data['max_5day_gold'] = self.data['value_gold'].rolling(window=self.n_sell_moving_average).max()
+        self.data['moving_average_bitcoin'] = self.data['value_bitcoin'].rolling(window=self.n_moving_average).mean()
+        self.data['moving_average_gold'] = self.data['value_gold'].rolling(window=self.n_moving_average).mean()
+
     def compute_buy_signals(self):
         # 动量和均值回归买入信号
         condition_BCHAIN = (self.data['grad_bitcoin'] > self.thr) & \
-                           ((self.data['value_bitcoin'] > (self.data['moving_average_bitcoin'] + 15)) | (self.data['value_bitcoin'] > (self.data['moving_average_bitcoin'] * self.rate_above_moving_average)))
+                           (self.data['value_bitcoin'] > self.data['moving_average_bitcoin'] * self.rate_above_moving_average)
         condition_BCHAIN |= (self.data['value_bitcoin'] < self.data['moving_average_bitcoin'] * self.rate_under_moving_average)
 
         condition_GOLD = (self.data['grad_gold'] > self.thr) & \
-                         ((self.data['value_gold'] > (self.data['moving_average_gold'] + 1)) | (self.data['value_gold'] > (self.data['moving_average_gold'] * self.rate_above_moving_average)))
+                         (self.data['value_gold'] > self.data['moving_average_gold'] * self.rate_above_moving_average)
         condition_GOLD |= (self.data['value_gold'] < self.data['moving_average_gold'] * self.rate_under_moving_average)
 
         # 仅当 'is_interpolated' 为 False 时才能买入/卖出黄金
@@ -153,13 +142,12 @@ class Market:
         extreme_GOLD = self.data.loc[current_day, 'Extreme_Market_gold']
         return extreme_BCHAIN or extreme_GOLD
 
-    def compute_sell_signals(self, portfolio, current_day, extreme_condition):
+    def compute_sell_signals(self, portfolio, current_day):
         sell_signals = {}
         for asset in ['bitcoin', 'gold']:
             if asset == 'bitcoin':
                 price = self.data.loc[current_day, 'value_bitcoin']
                 buy_or_sell = self.data.loc[current_day, 'buy_or_sell_bitcoin']
-                max_5day = self.data.loc[current_day, 'max_5day_bitcoin']
             else:
                 # 检查 'is_interpolated' 列，如果为 True 则不能交易黄金
                 if self.data.loc[current_day, 'is_interpolated']:
@@ -167,26 +155,25 @@ class Market:
                     continue
                 price = self.data.loc[current_day, 'value_gold']
                 buy_or_sell = self.data.loc[current_day, 'buy_or_sell_gold']
-                max_5day = self.data.loc[current_day, 'max_5day_gold']
             
             if not portfolio.can_sell(asset):
                 sell_signals[asset] = False
                 continue
             
-            # 计算卖出指标 S
-            fa = 0.01  # 卖出手续费
-            L = self.margin_L
-            S = (1 - fa) * portfolio.assets[asset] * price - L
-            
-            if extreme_condition:
-                #if price < 0.7 * max_5day:
-                #    sell_signals[asset] = True
-                #else:
-                sell_signals[asset] = False
-                # 在极端市场条件下，只有当价格低于近5天平均值的0.9时才允许卖出
+            current_price = price
+            # 计算平均成本
+            if portfolio.assets[asset] == 0:
+                average_cost = 0
             else:
-                # 正常条件下，根据 S > 0 判断是否卖出
-                sell_signals[asset] = S > 0
+                # 计算持有资产的加权平均成本
+                bought_prices = self.data.loc[:current_day][self.data.loc[:current_day, f'buy_or_sell_{asset}'] == 1][f'value_{asset}']
+                if not bought_prices.empty:
+                    average_cost = bought_prices.mean()
+                else:
+                    average_cost = 0
+            # 计算卖出指标 S
+            S = (1 - 0.01) * current_price - average_cost - self.margin_L  # 假设卖出手续费 fa = 1%
+            sell_signals[asset] = S > 0
         return sell_signals
 
     def execute_trades(self, portfolio, current_day):
@@ -202,8 +189,14 @@ class Market:
         else:
             can_buy = True
         
-        # 计算卖出信号
-        sell_signals = self.compute_sell_signals(portfolio, current_day, extreme_condition)
+        # 如果极端市场条件被激活，执行相应逻辑
+        if extreme_condition:
+            # 不允许卖出，直到价格回归
+            sell_signals = {"bitcoin": False, "gold": False}
+            # 回归条件需要根据论文中的具体描述进一步实现，这里简化为不卖出
+        else:
+            # 计算卖出信号
+            sell_signals = self.compute_sell_signals(portfolio, current_day)
         
         # 计算买入信号
         if can_buy:
@@ -214,31 +207,26 @@ class Market:
         else:
             buy_signals = {"bitcoin": False, "gold": False}
         
-        # **确保同一天内，单一资产不能同时买入和卖出**
-        for asset in ['bitcoin', 'gold']:
-            if sell_signals.get(asset, False):
-                buy_signals[asset] = False  # 如果当天卖出，则不买入该资产
-        
         # 初始化交易记录
-        buy_bitcoin = 0.0
-        sell_bitcoin = 0.0
-        buy_gold = 0.0
-        sell_gold = 0.0
+        buy_bitcoin = 0
+        sell_bitcoin = 0
+        buy_gold = 0
+        sell_gold = 0
         
         # 执行卖出操作
         for asset in ['bitcoin', 'gold']:
-            if sell_signals.get(asset, False):
+            if sell_signals[asset]:
                 price = self.data.loc[current_day, f'value_{asset}']
                 # 计算卖出金额
                 if portfolio.assets[asset] > 0:
-                    sell_value = portfolio.assets[asset] * price
-                    proceeds = (1 - 0.01) * sell_value  # 卖出手续费 fa = 1%
+                    sell_amount = portfolio.assets[asset]
+                    proceeds = (1 - 0.01) * sell_amount * price  # 假设卖出手续费 fa = 1%
                     portfolio.cash += proceeds
                     if asset == 'bitcoin':
-                        sell_bitcoin = sell_value
+                        sell_bitcoin = sell_amount
                     else:
-                        sell_gold = sell_value
-                    portfolio.assets[asset] = 0.0
+                        sell_gold = sell_amount
+                    portfolio.assets[asset] = 0
                     # 设置无买入期
                     portfolio.set_no_buy_period(self.no_buy_days)
         
@@ -248,19 +236,18 @@ class Market:
             if asset == 'gold' and self.data.loc[current_day, 'is_interpolated']:
                 continue  # 如果 'is_interpolated' 为 True，则跳过黄金交易
             
-            if buy_signals.get(asset, False):
+            if buy_signals[asset]:
                 price = self.data.loc[current_day, f'value_{asset}']
-                transaction_cost = 0.02 * portfolio.cash  # 买入手续费为2%
+                transaction_cost = 0.02 * portfolio.cash  # 假设买入手续费为2%
                 available_cash = portfolio.cash - transaction_cost
                 if available_cash > 0:
-                    buy_value = available_cash  # 全部可用现金用于买入
-                    buy_amount = buy_value / price  # 计算购买的单位数量
+                    buy_amount = available_cash / price
                     portfolio.assets[asset] += buy_amount
-                    portfolio.cash -= buy_value + transaction_cost
+                    portfolio.cash -= buy_amount * price + transaction_cost
                     if asset == 'bitcoin':
-                        buy_bitcoin = buy_value
+                        buy_bitcoin = buy_amount
                     else:
-                        buy_gold = buy_value
+                        buy_gold = buy_amount
                     # 设置持有期
                     portfolio.holding_period[asset] = self.holding_days
         
@@ -276,8 +263,8 @@ class Market:
             'sell_bitcoin': sell_bitcoin,
             'buy_gold': buy_gold,
             'sell_gold': sell_gold,
-            'holding_bitcoin_value': portfolio.assets['bitcoin'] * self.data.loc[current_day, 'value_bitcoin'],
-            'holding_gold_value': portfolio.assets['gold'] * self.data.loc[current_day, 'value_gold'],
+            'holding_bitcoin': portfolio.assets['bitcoin'],
+            'holding_gold': portfolio.assets['gold'],
             'cash': portfolio.cash,
             'total_value': total_value
         })
