@@ -62,12 +62,11 @@ class Market:
         self.t = 10  # 计算权重因子的范围
         self.C = self.weight_factor_constant
         self.weight_factor = self.C / (np.arange(1, self.t+1)**2)
-        self.weight_factor = self.weight_factor/self.weight_factor.sum()
         
         self.n_moving_average = 10  # 移动平均窗口大小
         self.thr = 0.05  # 梯度阈值
         self.rate_above_moving_average = 1.05
-        self.rate_under_moving_average = 0.80
+        self.rate_under_moving_average = 0.90
         self.rate_extreme_market = 5
         self.size_window_extreme_market = 10
         self.holding_days = 5  # 持有期天数
